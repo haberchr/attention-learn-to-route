@@ -79,7 +79,7 @@ def eval_dataset(dataset_path, width, softmax_temp, opts):
     # This is parallelism, even if we use multiprocessing (we report as if we did not use multiprocessing, e.g. 1 GPU)
     parallelism = opts.eval_batch_size
 
-    costs, tours, durations = zip(*results)  # Not really costs since they should be negative
+    costs, tours, durations, scales, filenames = zip(*results)  # Not really costs since they should be negative
 
     print("Average cost: {} +- {}".format(np.mean(costs), 2 * np.std(costs) / np.sqrt(len(costs))))
     print("Average serial duration: {} +- {}".format(
@@ -108,7 +108,7 @@ def eval_dataset(dataset_path, width, softmax_temp, opts):
 
     save_dataset((results, parallelism), out_file)
 
-    return costs, tours, durations
+    return costs, tours, durations, scales, filenames
 
 
 def _eval_dataset(model, dataset, width, softmax_temp, opts, device):
@@ -127,8 +127,14 @@ def _eval_dataset(model, dataset, width, softmax_temp, opts, device):
         dataloader = dataset
 
     results = []
-    for batch in tqdm(dataloader, disable=opts.no_progress_bar):
+
+    print(len(dataloader.data[0]))
+    print(dataloader.best[0])
+    print(dataloader.filename_index[0])
+    for i, batch in enumerate(tqdm(dataloader, disable=opts.no_progress_bar)):
         
+        scale = dataloader.best[i]
+        file = dataloader.filename_index[i]
         if not bool(opts.load_TSPDataset):
             batch = move_to(batch, device)
         if bool(opts.load_TSPDataset):
@@ -176,6 +182,7 @@ def _eval_dataset(model, dataset, width, softmax_temp, opts, device):
                 batch_size
             )
         duration = time.time() - start
+
         for seq, cost in zip(sequences, costs):
             if model.problem.NAME == "tsp":
                 seq = seq.tolist()  # No need to trim as all are same length
@@ -186,7 +193,10 @@ def _eval_dataset(model, dataset, width, softmax_temp, opts, device):
             else:
                 assert False, "Unkown problem: {}".format(model.problem.NAME)
             # Note VRP only
-            results.append((cost, seq, duration))
+
+            print(file)
+            print(cost)
+            results.append((cost, seq, duration, cost/float(scale[0][0][1]), file))
 
     return results
 

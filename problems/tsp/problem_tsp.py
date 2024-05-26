@@ -61,21 +61,20 @@ class TSPDataset(Dataset):
 
         self.data = []
         self.best = []
-        self.filename_map = {}
+        self.filename_index = []
 
         if directory_path is not None:
             # Load all .npy files from the directory
-            for file in glob.glob(os.path.join(directory_path, '*.npy')):
+            filelist = sorted(glob.glob(os.path.join(directory_path, '*.npy')))
+            print(filelist)
+            for file in filelist:
                 if file.endswith('sol.npy'):
                     self.best.append(np.load(file))
                     continue
                 np_data = np.load(file)
                 tensor_data = [torch.FloatTensor(row) for row in np_data]
                 self.data.append(tensor_data)
-
-            # Store the filename index mapping
-            for idx in range(len(tensor_data)):
-                self.filename_map[len(self.data) - len(tensor_data) + idx] = os.path.basename(file)
+                self.filename_index.append(os.path.basename(file))
 
         elif filename is not None:
             if filename.endswith('.npy'):

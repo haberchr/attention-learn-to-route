@@ -10,13 +10,21 @@ def check_extension(filename):
 
 def save_dataset(dataset, filename):
 
+    restults = dataset[0]
+    print("Saving...")
+    print(len(dataset))
+    print(dataset[0][2])
+    print(dataset[0][3])
+    print(dataset[0][4])
+    print(filename)
+
     filedir = os.path.split(filename)[0]
 
     if not os.path.isdir(filedir):
         os.makedirs(filedir)
 
     with open(check_extension(filename), 'wb') as f:
-        pickle.dump(dataset, f, pickle.HIGHEST_PROTOCOL)
+        pickle.dump(dataset[0], f, pickle.HIGHEST_PROTOCOL)
 
 
 def load_dataset(filename):
