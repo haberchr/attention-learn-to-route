@@ -9,6 +9,7 @@ from torch.nn import DataParallel
 
 from nets.attention_model import set_decode_type
 from utils.level_edit import global_perturb_tensor, local_perturb_tensor, random_edit_tensor
+from utils.transformations import transform_tensor_batch
 from utils.log_utils import log_values
 from utils import move_to
 
@@ -155,16 +156,16 @@ def train_epoch(
     num_replace = train_reward.size(0) // 2
     low_idx = sorted_idx[:num_replace]
     high_idx = sorted_idx[num_replace:num_replace*2]
-    replace_val = [
-        training_dataset[i] for i in torch.randint(0, training_dataset.size, (num_replace,))
+    new_data = [
+        torch.FloatTensor(opts.graph_size, 2).uniform_(0, 1) for i in range(num_replace)
     ]
 
     for i in range(num_replace):
-        # Replace low_idx entries with edited high_idx entries
-        training_dataset[low_idx[i]] = edit_function(training_dataset[high_idx[i]], 10)
+        # Replace low_idx entries with edited high_idx entries, which incur high cost
+        training_dataset[low_idx[i]] = edit_function(training_dataset[high_idx[i]], 20)
 
-        # Replace high_idx entries with uniform sample from training_dataset
-        training_dataset[high_idx[i]] = replace_val[i]
+        # Replace high_idx entries with fresh data
+        training_dataset[high_idx[i]] = new_data[i]
     
     return training_dataset
 
@@ -181,6 +182,12 @@ def train_batch(
         opts
 ):
     x, bl_val = baseline.unwrap_batch(batch)
+
+    # Apply data transformations if specified
+    if opts.data_equivariance:
+        x = transform_tensor_batch(x)
+
+    # Move to GPU if available
     x = move_to(x, opts.device)
     bl_val = move_to(bl_val, opts.device) if bl_val is not None else None
 

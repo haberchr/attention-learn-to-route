@@ -52,8 +52,6 @@ class TSP(object):
         return beam_search(state, beam_size, propose_expansions)
 
 
-import torch
-from torch.utils.data import Dataset
 class TSPDataset(Dataset):
     
     def __init__(self, directory_path=None, filename=None, size=4, num_samples=6, offset=0, distribution=None):
