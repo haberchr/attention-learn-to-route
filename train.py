@@ -12,6 +12,7 @@ from nets.attention_model import set_decode_type
 from utils.level_edit import global_perturb_tensor, local_perturb_tensor, random_edit_tensor
 from utils.transformations import transform_tensor_batch
 from utils.hardness_adaptive import get_hard_samples
+from utils.ewc import EWC
 from utils.log_utils import log_values
 from utils import move_to
 
@@ -75,6 +76,7 @@ def train_epoch(
         lr_scheduler,
         epoch,
         training_dataset,
+        ewc_dataset,
         val_dataset,
         problem,
         tb_logger,
@@ -94,11 +96,30 @@ def train_epoch(
         )
     
     # Randomly make half the data harder if hardness adaptive curriculum is used
-    if opts.hardness_adaptive:
+    if opts.hardness_adaptive_percent > 0:
+        target = (training_dataset.size * opts.hardness_adaptive_percent) // 100
         random.shuffle(training_dataset.data)
-        mid = training_dataset.size // 2
-        hard_data = get_hard_samples(model, training_dataset.data[mid:], eps=5, device=opts.device, baseline=baseline)
-        training_dataset.data[mid:] = hard_data
+        hard_data = get_hard_samples(model, training_dataset.data[:target], eps=5, device=opts.device, baseline=baseline)
+        training_dataset.data[:target] = hard_data
+    
+    # Initialize EWC if applicable
+    ewc = None
+    if opts.ewc_lambda > 0:
+        if ewc_dataset is None or opts.ewc_from_unif:
+            ewc_dataset = torch.FloatTensor(opts.ewc_fisher_n, opts.graph_size, 2).uniform_(0, 1).to(opts.device)
+        if opts.ewc_adaptive:
+            ewc_dataset = get_hard_samples(
+                model, ewc_dataset, eps=5, device=opts.device, baseline=baseline, get_easy=True
+            ).to(opts.device)
+        bl_cost = 0
+        if baseline is not None and hasattr(baseline, 'model'):
+            bl_cost = rollout(baseline.model, ewc_dataset, opts).to(opts.device)
+        ewc = EWC(
+            model,
+            bl_cost,
+            ewc_dataset,
+            opts
+        )
     
     # Wrap dataset in DataLoader
     training_dataset_wrapped = baseline.wrap_dataset(training_dataset)
@@ -119,6 +140,7 @@ def train_epoch(
             step,
             batch,
             tb_logger,
+            ewc,
             opts
         )
 
@@ -149,39 +171,51 @@ def train_epoch(
     # lr_scheduler should be called at end of epoch
     lr_scheduler.step()
 
-    # Edit and return new training data if applicable
-    # Only available for TSP problem
+    # Compute regret on instances
     edit_function = opts.edit_fn
-    if edit_function == None or opts.problem != 'tsp':
-        return None
-    elif opts.edit_fn == 'global_perturb':
-        edit_function = global_perturb_tensor
-    elif opts.edit_fn == 'local_perturb':
-        edit_function = local_perturb_tensor
-    elif opts.edit_fn == 'random_edit':
-        edit_function = random_edit_tensor
+    calc_ewc = opts.ewc_lambda > 0
+    calc_dataset = (edit_function != None and opts.problem == 'tsp')
+    if calc_ewc or calc_dataset:
+        bl_cost = 0
+        if baseline is not None and hasattr(baseline, 'model'):
+            bl_cost = rollout(baseline.model, training_dataset, opts)
+        train_regret = rollout(model, training_dataset, opts) - bl_cost
+        sorted_idx = torch.argsort(train_regret)
+
+    # Create new EWC dataset if applicable
+    # Needs to occur *before* mutations, because we use training_dataset entries
+    if calc_ewc:
+        ewc_dataset_new = []
+        for i in range(opts.ewc_fisher_n):
+            ewc_dataset_new.append(training_dataset[sorted_idx[i]])
+        ewc_dataset = torch.stack(ewc_dataset_new, dim=0).to(opts.device)
+
+    # Calculate new training data if applicable
+    # Only available for TSP problem
+    if not calc_dataset:
+        training_dataset = None
+    else:
+        if opts.edit_fn == 'global_perturb':
+            edit_function = global_perturb_tensor
+        elif opts.edit_fn == 'local_perturb':
+            edit_function = local_perturb_tensor
+        elif opts.edit_fn == 'random_edit':
+            edit_function = random_edit_tensor
+
+        num_replace = train_regret.size(0) // 2
+        low_idx = sorted_idx[:num_replace]
+        high_idx = sorted_idx[num_replace:num_replace*2]
+        new_data = [
+            torch.FloatTensor(opts.graph_size, 2).uniform_(0, 1) for i in range(num_replace)
+        ]
+
+        for i in range(num_replace):
+            # Replace low_idx entries with edited high_idx entries, which incur high cost
+            training_dataset[low_idx[i]] = edit_function(training_dataset[high_idx[i]], 20)
+            # Replace high_idx entries with fresh data
+            training_dataset[high_idx[i]] = new_data[i]
     
-    bl_cost = 0
-    if baseline is not None and hasattr(baseline, 'model'):
-        bl_cost = rollout(baseline.model, training_dataset, opts)
-    train_regret = rollout(model, training_dataset, opts) - bl_cost
-    sorted_idx = torch.argsort(train_regret)
-
-    num_replace = train_regret.size(0) // 2
-    low_idx = sorted_idx[:num_replace]
-    high_idx = sorted_idx[num_replace:num_replace*2]
-    new_data = [
-        torch.FloatTensor(opts.graph_size, 2).uniform_(0, 1) for i in range(num_replace)
-    ]
-
-    for i in range(num_replace):
-        # Replace low_idx entries with edited high_idx entries, which incur high cost
-        training_dataset[low_idx[i]] = edit_function(training_dataset[high_idx[i]], 20)
-
-        # Replace high_idx entries with fresh data
-        training_dataset[high_idx[i]] = new_data[i]
-    
-    return training_dataset
+    return training_dataset, ewc_dataset
 
 
 def train_batch(
@@ -193,6 +227,7 @@ def train_batch(
         step,
         batch,
         tb_logger,
+        ewc,
         opts
 ):
     x, bl_val = baseline.unwrap_batch(batch)
@@ -213,7 +248,7 @@ def train_batch(
 
     # Calculate loss
     loss = (cost - bl_val) * log_likelihood
-    if opts.hardness_adaptive:
+    if opts.hardness_adaptive_percent > 0:
         w = ((cost/bl_val) * log_likelihood).detach()
         t = torch.FloatTensor([20-(epoch % 20)]).to(loss.device)
         w = torch.tanh(w)
@@ -223,6 +258,9 @@ def train_batch(
     else:
         reinforce_loss = (loss).mean()
     loss = reinforce_loss + bl_loss
+
+    if ewc is not None:
+        loss += ewc.penalty(model)
 
     # Perform backward pass and optimization step
     optimizer.zero_grad()
