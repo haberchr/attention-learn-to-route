@@ -47,6 +47,10 @@ def get_options(args=None):
     parser.add_argument('--bl_warmup_epochs', type=int, default=None,
                         help='Number of epochs to warmup the baseline, default None means 1 for rollout (exponential '
                              'used for warmup phase), 0 otherwise. Can only be used with rollout baseline.')
+    parser.add_argument('--ewc_lambda', type=float, default=0, help='Elastic weight consolidation lambda (0 to disable)')
+    parser.add_argument('--ewc_fisher_n', type=int, default=2048, help='Number of samples to estimate Fisher Information')
+    parser.add_argument('--ewc_from_unif', action='store_true', help='Use uniform samples to estimate Fisher Information')
+    parser.add_argument('--ewc_adaptive', action='store_true', help='Use hardness adaptive EWC')
     parser.add_argument('--eval_batch_size', type=int, default=1024,
                         help="Batch size to use during (baseline) evaluation")
     parser.add_argument('--checkpoint_encoder', action='store_true',
@@ -59,6 +63,8 @@ def get_options(args=None):
     parser.add_argument('--edit_fn', type=str, default=None,
                         help="Dual curriculum edit function to use: 'global_perturb', 'local_perturb' or 'random_edit'. "
                              'Defaults to no edit function. Only available for tsp problem.')
+    parser.add_argument('--hardness_adaptive_percent', type=int, default=0,
+                        help='Percent of epoch to put under hardness adaptive curriculum')
     parser.add_argument('--data_equivariance', action='store_true',
                         help='Apply rotational and translational invariance during training')
 
@@ -74,6 +80,7 @@ def get_options(args=None):
                         help='Save checkpoint every n epochs (default 1), 0 to save no checkpoints')
     parser.add_argument('--load_path', help='Path to load model parameters and optimizer state from')
     parser.add_argument('--resume', help='Resume from previous checkpoint file')
+    parser.add_argument('--pretrain_path', type=str, default=None, help='Fine-tune a pretrained model')
     parser.add_argument('--no_tensorboard', action='store_true', help='Disable logging TensorBoard files')
     parser.add_argument('--no_progress_bar', action='store_true', help='Disable progress bar')
 
